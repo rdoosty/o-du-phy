@@ -121,6 +121,259 @@ unsigned long tsc_recovery();
 unsigned long tsc_tick();
 
 /*!
+    \brief Run the given function and return the mean run time and stddev.
+    \param [in] function Function to benchmark.
+    \param [in] args Function's arguments.
+    \return std::pair where the first element is mean and the second one is standard deviation.
+*/
+template <typename F, typename ... Args>
+std::pair<double, double> run_benchmark(F function, Args ... args)
+{
+    std::vector<long> results((unsigned long) BenchmarkParameters::repetition);
+
+    for(unsigned int outer_loop = 0; outer_loop < BenchmarkParameters::repetition; outer_loop++) {
+        const auto start_time =  __rdtsc();
+        for (unsigned int inner_loop = 0; inner_loop < BenchmarkParameters::loop; inner_loop++) {
+                function(args ...);
+        }
+        const auto end_time = __rdtsc();
+        results.push_back(end_time - start_time);
+    }
+
+    return calculate_statistics(results);
+};
+
+/*!
+    \brief Assert elements of two arrays. It calls ASSERT_EQ for each element of the array.
+    \param [in] reference Array with reference values.
+    \param [in] actual Array with the actual output.
+    \param [in] size Size of the array.
+*/
+template <typename T>
+void assert_array_eq(const T* reference, const T* actual, const int size)
+{
+    for(int index = 0; index < size ; index++)
+    {
+        ASSERT_EQ(reference[index], actual[index])
+                          <<"The wrong number is index: "<< index;
+    }
+}
+
+/*!
+    \brief Assert elements of two arrays. It calls ASSERT_NEAR for each element of the array.
+    \param [in] reference Array with reference values.
+    \param [in] actual Array with the actual output.
+    \param [in] size Size of the array.
+    \param [in] precision Precision fo the comparision used by ASSERT_NEAR.
+*/
+template <typename T>
+void assert_array_near(const T* reference, const T* actual, const int size, const double precision)
+{
+    for(int index = 0; index < size ; index++)
+    {
+        ASSERT_NEAR(reference[index], actual[index], precision)
+                                <<"The wrong number is index: "<< index;
+    }
+}
+
+template <>
+void assert_array_near<complex_float>(const complex_float* reference, const complex_float* actual, const int size, const double precision)
+{
+    for(int index = 0; index < size ; index++)
+    {
+        ASSERT_NEAR(reference[index].re, actual[index].re, precision)
+                             <<"The wrong number is RE, index: "<< index;
+        ASSERT_NEAR(reference[index].im, actual[index].im, precision)
+                             <<"The wrong number is IM, index: "<< index;
+    }
+}
+
+/*!
+    \brief Assert average diff of two arrays. It calls ASSERT_GT to check the average.
+    \param [in] reference Array with reference values, interleaved IQ inputs.
+    \param [in] actual Array with the actual output, interleaved IQ inputs.
+    \param [in] size Size of the array, based on complex inputs.
+    \param [in] precision Precision for the comparison used by ASSERT_GT.
+*/
+template<typename T>
+void assert_avg_greater_complex(const T* reference, const T* actual, const int size, const double precision)
+{
+    float mseDB, MSE;
+    double avgMSEDB = 0.0;
+    for (int index = 0; index < size; index++) {
+        T refReal = reference[2*index];
+        T refImag = reference[(2*index)+1];
+        T resReal = actual[2*index];
+        T resImag = actual[(2*index)+1];
+
+        T errReal = resReal - refReal;
+        T errIm = resImag - refImag;
+
+        /* For some unit tests, e.g. PUCCH deomdulation, the expected output is 0. To avoid a
+           divide by zero error, check the reference results to determine if the expected result
+           is 0 and, if so, add a 1 to the division. */
+        if (refReal == 0 && refImag == 0)
+            MSE = (float)(errReal*errReal + errIm*errIm)/(float)(refReal*refReal + refImag*refImag + 1);
+        else
+            MSE = (float)(errReal*errReal + errIm*errIm)/(float)(refReal*refReal + refImag*refImag);
+
+        if(MSE == 0)
+            mseDB = (float)(-100.0);
+        else
+            mseDB = (float)(10.0) * (float)log10(MSE);
+
+        avgMSEDB += (double)mseDB;
+        }
+
+        avgMSEDB /= size;
+
+        ASSERT_GT(precision, avgMSEDB);
+}
+
+/*!
+    \brief Allocates memory of the given size.
+
+    aligned_malloc is wrapper to functions that allocate memory:
+    'rte_malloc' from DPDK if hugepages are defined, 'memalign' otherwise.
+    Size is defined as a number of variables of given type e.g. floats, rather than bytes.
+    It hides sizeof(T) multiplication and cast hence makes things cleaner.
+
+    \param [in] size Size of the memory to allocate.
+    \param [in] alignment Bytes alignment of the allocated memory. If 0, the return is a pointer
+                that is suitably aligned for any kind of variable (in the same manner as malloc()).
+                Otherwise, the return is a pointer that is a multiple of align. In this case,
+                it must be a power of two. (Minimum alignment is the cacheline size, i.e. 64-bytes)
+    \return Pointer to the allocated memory.
+*/
+template <typename T>
+T* aligned_malloc(const int size, const unsigned alignment)
+{
+#ifdef _BBLIB_DPDK_
+    return (T*) rte_malloc(NULL, sizeof(T) * size, alignment);
+#else
+#ifndef _WIN64
+    return (T*) memalign(alignment, sizeof(T) * size);
+#else
+    return (T*)_aligned_malloc(sizeof(T)*size, alignment);
+#endif
+#endif
+}
+
+/*!
+    \brief Frees memory pointed by the given pointer.
+
+    aligned_free is a wrapper for functions that free memory allocated by
+    aligned_malloc: 'rte_free' from DPDK if hugepages are defined and 'free' otherwise.
+
+    \param [in] ptr Pointer to the allocated memory.
+*/
+template <typename T>
+void aligned_free(T* ptr)
+{
+#ifdef _BBLIB_DPDK_
+    rte_free((void*)ptr);
+#else
+
+#ifndef _WIN64
+    free((void*)ptr);
+#else
+    _aligned_free((void *)ptr);
+#endif
+#endif
+}
+
+/*!
+    \brief generate random numbers.
+
+    It allocates memory and populate it with random numbers using C++11 default engine and
+    uniform real / int distribution (where lo_range <= x <up_range). Don't forget to free
+    allocated memory!
+
+    \param [in] size Size of the memory to be filled with random data.
+    \param [in] alignment Bytes alignment of the memory.
+    \param [in] distribution Distribuiton for random generator.
+    \return Pointer to the allocated memory with random data.
+*/
+template <typename T, typename U>
+T* generate_random_numbers(const long size, const unsigned alignment, U& distribution)
+{
+    auto array = (T*) aligned_malloc<char>(size * sizeof(T), alignment);
+
+    std::random_device random_device;
+    std::default_random_engine generator(random_device());
+
+    for(long i = 0; i < size; i++)
+        array[i] = (T)distribution(generator);
+
+    return array;
+}
+
+/*!
+    \brief generate random data.
+
+    It allocates memory and populate it with random data using C++11 default engine and
+    uniform integer distribution (bytes not floats are uniformly distributed). Don't forget
+    to free allocated memory!
+
+    \param [in] size Size of the memory to be filled with random data.
+    \param [in] alignment Bytes alignment of the memory.
+    \return Pointer to the allocated memory with random data.
+*/
+template <typename T>
+T* generate_random_data(const long size, const unsigned alignment)
+{
+    std::uniform_int_distribution<> random(0, 255);
+
+    return (T*)generate_random_numbers<char, std::uniform_int_distribution<>>(size * sizeof(T), alignment, random);
+}
+
+/*!
+    \brief generate integer random numbers.
+
+    It allocates memory and populate it with random numbers using C++11 default engine and
+    uniform integer distribution (where lo_range <= x < up_range). Don't forget
+    to free allocated memory! The result type generated by the generator should be one of
+    int types.
+
+    \param [in] size Size of the memory to be filled with random data.
+    \param [in] alignment Bytes alignment of the memory.
+    \param [in] lo_range Lower bound of range of values returned by random generator.
+    \param [in] up_range Upper bound of range of values returned by random generator.
+    \return Pointer to the allocated memory with random data.
+*/
+template <typename T>
+T* generate_random_int_numbers(const long size, const unsigned alignment, const T lo_range,
+                               const T up_range)
+{
+    std::uniform_int_distribution<T> random(lo_range, up_range);
+
+    return generate_random_numbers<T, std::uniform_int_distribution<T>>(size, alignment, random);
+}
+
+/*!
+    \brief generate real random numbers.
+
+    It allocates memory and populate it with random numbers using C++11 default engine and
+    uniform real distribution (where lo_range <= x <up_range). Don't forget to free
+    allocated memory! The result type generated by the generator should be one of
+    real types: float, double or long double.
+
+    \param [in] size Size of the memory to be filled with random data.
+    \param [in] alignment Bytes alignment of the memory.
+    \param [in] lo_range Lower bound of range of values returned by random generator.
+    \param [in] up_range Upper bound of range of values returned by random generator.
+    \return Pointer to the allocated memory with random data.
+*/
+template <typename T>
+T* generate_random_real_numbers(const long size, const unsigned alignment, const T lo_range,
+                                const T up_range)
+{
+    std::uniform_real_distribution<T> distribution(lo_range, up_range);
+
+    return generate_random_numbers<T, std::uniform_real_distribution<T>>(size, alignment, distribution);
+}
+
+/*!
     \class KernelTests
 
     Each test class has to inherit from KernelTests class as it provides GTest support and does a lot
@@ -574,258 +827,5 @@ private:
                                  const double mean,
                                  const double stddev);
 };
-
-/*!
-    \brief Run the given function and return the mean run time and stddev.
-    \param [in] function Function to benchmark.
-    \param [in] args Function's arguments.
-    \return std::pair where the first element is mean and the second one is standard deviation.
-*/
-template <typename F, typename ... Args>
-std::pair<double, double> run_benchmark(F function, Args ... args)
-{
-    std::vector<long> results((unsigned long) BenchmarkParameters::repetition);
-
-    for(unsigned int outer_loop = 0; outer_loop < BenchmarkParameters::repetition; outer_loop++) {
-        const auto start_time =  __rdtsc();
-        for (unsigned int inner_loop = 0; inner_loop < BenchmarkParameters::loop; inner_loop++) {
-                function(args ...);
-        }
-        const auto end_time = __rdtsc();
-        results.push_back(end_time - start_time);
-    }
-
-    return calculate_statistics(results);
-};
-
-/*!
-    \brief Assert elements of two arrays. It calls ASSERT_EQ for each element of the array.
-    \param [in] reference Array with reference values.
-    \param [in] actual Array with the actual output.
-    \param [in] size Size of the array.
-*/
-template <typename T>
-void assert_array_eq(const T* reference, const T* actual, const int size)
-{
-    for(int index = 0; index < size ; index++)
-    {
-        ASSERT_EQ(reference[index], actual[index])
-                          <<"The wrong number is index: "<< index;
-    }
-}
-
-/*!
-    \brief Assert elements of two arrays. It calls ASSERT_NEAR for each element of the array.
-    \param [in] reference Array with reference values.
-    \param [in] actual Array with the actual output.
-    \param [in] size Size of the array.
-    \param [in] precision Precision fo the comparision used by ASSERT_NEAR.
-*/
-template <typename T>
-void assert_array_near(const T* reference, const T* actual, const int size, const double precision)
-{
-    for(int index = 0; index < size ; index++)
-    {
-        ASSERT_NEAR(reference[index], actual[index], precision)
-                                <<"The wrong number is index: "<< index;
-    }
-}
-
-template <>
-void assert_array_near<complex_float>(const complex_float* reference, const complex_float* actual, const int size, const double precision)
-{
-    for(int index = 0; index < size ; index++)
-    {
-        ASSERT_NEAR(reference[index].re, actual[index].re, precision)
-                             <<"The wrong number is RE, index: "<< index;
-        ASSERT_NEAR(reference[index].im, actual[index].im, precision)
-                             <<"The wrong number is IM, index: "<< index;
-    }
-}
-
-/*!
-    \brief Assert average diff of two arrays. It calls ASSERT_GT to check the average.
-    \param [in] reference Array with reference values, interleaved IQ inputs.
-    \param [in] actual Array with the actual output, interleaved IQ inputs.
-    \param [in] size Size of the array, based on complex inputs.
-    \param [in] precision Precision for the comparison used by ASSERT_GT.
-*/
-template<typename T>
-void assert_avg_greater_complex(const T* reference, const T* actual, const int size, const double precision)
-{
-    float mseDB, MSE;
-    double avgMSEDB = 0.0;
-    for (int index = 0; index < size; index++) {
-        T refReal = reference[2*index];
-        T refImag = reference[(2*index)+1];
-        T resReal = actual[2*index];
-        T resImag = actual[(2*index)+1];
-
-        T errReal = resReal - refReal;
-        T errIm = resImag - refImag;
-
-        /* For some unit tests, e.g. PUCCH deomdulation, the expected output is 0. To avoid a
-           divide by zero error, check the reference results to determine if the expected result
-           is 0 and, if so, add a 1 to the division. */
-        if (refReal == 0 && refImag == 0)
-            MSE = (float)(errReal*errReal + errIm*errIm)/(float)(refReal*refReal + refImag*refImag + 1);
-        else
-            MSE = (float)(errReal*errReal + errIm*errIm)/(float)(refReal*refReal + refImag*refImag);
-
-        if(MSE == 0)
-            mseDB = (float)(-100.0);
-        else
-            mseDB = (float)(10.0) * (float)log10(MSE);
-
-        avgMSEDB += (double)mseDB;
-        }
-
-        avgMSEDB /= size;
-
-        ASSERT_GT(precision, avgMSEDB);
-}
-
-/*!
-    \brief Allocates memory of the given size.
-
-    aligned_malloc is wrapper to functions that allocate memory:
-    'rte_malloc' from DPDK if hugepages are defined, 'memalign' otherwise.
-    Size is defined as a number of variables of given type e.g. floats, rather than bytes.
-    It hides sizeof(T) multiplication and cast hence makes things cleaner.
-
-    \param [in] size Size of the memory to allocate.
-    \param [in] alignment Bytes alignment of the allocated memory. If 0, the return is a pointer
-                that is suitably aligned for any kind of variable (in the same manner as malloc()).
-                Otherwise, the return is a pointer that is a multiple of align. In this case,
-                it must be a power of two. (Minimum alignment is the cacheline size, i.e. 64-bytes)
-    \return Pointer to the allocated memory.
-*/
-template <typename T>
-T* aligned_malloc(const int size, const unsigned alignment)
-{
-#ifdef _BBLIB_DPDK_
-    return (T*) rte_malloc(NULL, sizeof(T) * size, alignment);
-#else
-#ifndef _WIN64
-    return (T*) memalign(alignment, sizeof(T) * size);
-#else
-    return (T*)_aligned_malloc(sizeof(T)*size, alignment);
-#endif
-#endif
-}
-
-/*!
-    \brief Frees memory pointed by the given pointer.
-
-    aligned_free is a wrapper for functions that free memory allocated by
-    aligned_malloc: 'rte_free' from DPDK if hugepages are defined and 'free' otherwise.
-
-    \param [in] ptr Pointer to the allocated memory.
-*/
-template <typename T>
-void aligned_free(T* ptr)
-{
-#ifdef _BBLIB_DPDK_
-    rte_free((void*)ptr);
-#else
-
-#ifndef _WIN64
-    free((void*)ptr);
-#else
-    _aligned_free((void *)ptr);
-#endif
-#endif
-}
-
-/*!
-    \brief generate random numbers.
-
-    It allocates memory and populate it with random numbers using C++11 default engine and
-    uniform real / int distribution (where lo_range <= x <up_range). Don't forget to free
-    allocated memory!
-
-    \param [in] size Size of the memory to be filled with random data.
-    \param [in] alignment Bytes alignment of the memory.
-    \param [in] distribution Distribuiton for random generator.
-    \return Pointer to the allocated memory with random data.
-*/
-template <typename T, typename U>
-T* generate_random_numbers(const long size, const unsigned alignment, U& distribution)
-{
-    auto array = (T*) aligned_malloc<char>(size * sizeof(T), alignment);
-
-    std::random_device random_device;
-    std::default_random_engine generator(random_device());
-
-    for(long i = 0; i < size; i++)
-        array[i] = (T)distribution(generator);
-
-    return array;
-}
-
-/*!
-    \brief generate random data.
-
-    It allocates memory and populate it with random data using C++11 default engine and
-    uniform integer distribution (bytes not floats are uniformly distributed). Don't forget
-    to free allocated memory!
-
-    \param [in] size Size of the memory to be filled with random data.
-    \param [in] alignment Bytes alignment of the memory.
-    \return Pointer to the allocated memory with random data.
-*/
-template <typename T>
-T* generate_random_data(const long size, const unsigned alignment)
-{
-    std::uniform_int_distribution<> random(0, 255);
-
-    return (T*)generate_random_numbers<char, std::uniform_int_distribution<>>(size * sizeof(T), alignment, random);
-}
-
-/*!
-    \brief generate integer random numbers.
-
-    It allocates memory and populate it with random numbers using C++11 default engine and
-    uniform integer distribution (where lo_range <= x < up_range). Don't forget
-    to free allocated memory! The result type generated by the generator should be one of
-    int types.
-
-    \param [in] size Size of the memory to be filled with random data.
-    \param [in] alignment Bytes alignment of the memory.
-    \param [in] lo_range Lower bound of range of values returned by random generator.
-    \param [in] up_range Upper bound of range of values returned by random generator.
-    \return Pointer to the allocated memory with random data.
-*/
-template <typename T>
-T* generate_random_int_numbers(const long size, const unsigned alignment, const T lo_range,
-                               const T up_range)
-{
-    std::uniform_int_distribution<T> random(lo_range, up_range);
-
-    return generate_random_numbers<T, std::uniform_int_distribution<T>>(size, alignment, random);
-}
-
-/*!
-    \brief generate real random numbers.
-
-    It allocates memory and populate it with random numbers using C++11 default engine and
-    uniform real distribution (where lo_range <= x <up_range). Don't forget to free
-    allocated memory! The result type generated by the generator should be one of
-    real types: float, double or long double.
-
-    \param [in] size Size of the memory to be filled with random data.
-    \param [in] alignment Bytes alignment of the memory.
-    \param [in] lo_range Lower bound of range of values returned by random generator.
-    \param [in] up_range Upper bound of range of values returned by random generator.
-    \return Pointer to the allocated memory with random data.
-*/
-template <typename T>
-T* generate_random_real_numbers(const long size, const unsigned alignment, const T lo_range,
-                                const T up_range)
-{
-    std::uniform_real_distribution<T> distribution(lo_range, up_range);
-
-    return generate_random_numbers<T, std::uniform_real_distribution<T>>(size, alignment, distribution);
-}
 
 #endif //XRANLIB_COMMON_HPP
