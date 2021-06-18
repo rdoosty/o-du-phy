@@ -28,5 +28,5 @@ echo 1 > /proc/sys/kernel/core_uses_pid
 #25G
 
 
-./build/sample-app -c ./usecase/cat_b/mu1_100mhz/101/config_file_o_du.dat -p 2  0000:21:02.0  0000:21:02.1
+./build/sample-app -c ./usecase/cat_b/mu1_100mhz/101/config_file_o_du.dat -p 2  0000:25:02.0  0000:25:02.1
 #./build/sample-app ./usecase/mu1_100mhz/config_file_o_du.dat  0000:18:02.0  0000:18:02.1
