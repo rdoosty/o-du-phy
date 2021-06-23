@@ -68,13 +68,14 @@ fi
 echo 'Building xRAN Library'
 echo "LIBXRANSO = ${LIBXRANSO}"
 echo "MLOG      = ${MLOG}"
+echo "Build directory = ${XRAN_FH_LIB_DIR}"
 
 cd $XRAN_FH_LIB_DIR
-make $COMMAND_LINE MLOG=${MLOG} LIBXRANSO=${LIBXRANSO} #DEBUG=1 VERBOSE=1
+make -j$COMMAND_LINE MLOG=${MLOG} LIBXRANSO=${LIBXRANSO} #DEBUG=1 VERBOSE=1
 
 echo 'Building xRAN Test Application'
 cd $XRAN_FH_APP_DIR
-make $COMMAND_LINE MLOG=${MLOG} #DEBUG=1 VERBOSE=1
+make -j$COMMAND_LINE MLOG=${MLOG} #DEBUG=1 VERBOSE=1
 
 if [ -z ${GTEST_ROOT+x} ];
 then
@@ -84,4 +85,3 @@ else
 	cd $XRAN_FH_TEST_DIR
 	make $COMMAND_LINE;
 fi
-
