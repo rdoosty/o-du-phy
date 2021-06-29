@@ -55,7 +55,7 @@ uint8_t nr5g_fapi_dpdk_init(
     int argc = RTE_DIM(argv);
 
     /* initialize EAL first */
-    snprintf(whitelist, 32, "-w %s", "0000:00:06.0");
+    snprintf(whitelist, 32, "-w%s", "0000:25:02.0");
 
     if (p_cfg->dpdk.iova_mode == 0)
         snprintf(iova_mode, 64, "%s", "--iova-mode=pa");
