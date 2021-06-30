@@ -1,5 +1,4 @@
 #!/bin/bash
-sudo yum install libhugetlbfs
 cd $DIR_ROOT_PHY
 wget http://static.dpdk.org/rel/dpdk-19.11.tar.xz
 tar -xf dpdk-19.11.tar.xz

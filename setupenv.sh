@@ -10,10 +10,10 @@ export DIR_ROOT=$1
 export DIR_ROOT_L1_BIN=$DIR_ROOT/FlexRAN
 #set the phy root DIR
 export DIR_ROOT_PHY=$DIR_ROOT/o-du-phy
-source /opt/intel/oneapi/compiler/2021.2.0/env/vars.sh intel64 -platform linux
-source /opt/intel/oneapi/mkl/2021.2.0/env/vars.sh intel64 -platform linux
-source /opt/intel/oneapi/ipp/2021.2.0/env/vars.sh intel64 -platform linux
-#source /opt/intel/oneapi/itac/2021.2.0/env/vars.sh intel64 -platform linux
+source /opt/intel/oneapi/compiler/2021.3.0/env/vars.sh intel64 -platform linux
+source /opt/intel/oneapi/mkl/2021.3.0/env/vars.sh intel64 -platform linux
+source /opt/intel/oneapi/ipp/2021.3.0/env/vars.sh intel64 -platform linux
+#source /opt/intel/oneapi/itac/2021.3.0/env/vars.sh intel64 -platform linux
 
 export DIR_WIRELESS_TEST_5G=$DIR_ROOT_L1_BIN/testcase
 export DIR_WIRELESS_SDK=$DIR_ROOT_L1_BIN/sdk/build-avx512-icc

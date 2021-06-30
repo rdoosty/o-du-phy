@@ -1,5 +1,4 @@
 #!/bin/bash
-source /opt/intel/oneapi/compiler/2021.1.1/env/vars.sh intel64
 pushd .
 cd $DIR_WIRELESS_WLS
 source ./build.sh
