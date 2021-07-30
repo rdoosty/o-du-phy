@@ -1,4 +1,5 @@
 #!/bin/bash
+sudo yum -y install pciutils octave-3.8.2-20.el7.x86_64
 cd $DIR_ROOT_PHY
 wget http://static.dpdk.org/rel/dpdk-19.11.tar.xz
 tar -xf dpdk-19.11.tar.xz
